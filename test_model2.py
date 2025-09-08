@@ -7,7 +7,7 @@ import os
 
 # --- Настройки ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL_PATH = "gaze_best.pth"
+MODEL_PATH = "models/gaze_best.pth"
 POINT_COLOR = (0, 200, 0)  # Зеленая точка
 POINT_RADIUS = 10
 CALIBRATION_INSTRUCTION = ""
