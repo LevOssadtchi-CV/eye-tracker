@@ -116,7 +116,7 @@ for epoch in range(EPOCHS):
     # --- Сохраняем модель при улучшении валидационного лосса ---
     if val_loss < best_val_loss:
         best_val_loss = val_loss
-        torch.save(model.state_dict(), "gaze_best.pth")
+        torch.save(model.state_dict(), "models/gaze_best.pth")
         print("  [*] Новый минимальный валид. лосс, модель сохранена!")
 
 print("Обучение завершено!")

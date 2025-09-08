@@ -11,10 +11,9 @@ OUTPUT_DIR = "eyes_dataset"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 CSV_FILE = os.path.join(OUTPUT_DIR, "metadata.csv")
 
-# Цвет точки (приятный зеленый)
 POINT_COLOR = (0, 200, 0)
 POINT_RADIUS = 15
-POINT_SPEED = 5  # пикселей за кадр
+POINT_SPEED = 8  # пикселей за кадр
 
 # --- MediaPipe ---
 mp_face_mesh = mp.solutions.face_mesh
@@ -32,16 +31,10 @@ def eye_center(landmarks, idxs, w, h):
     ys = [landmarks[i].y * h for i in idxs]
     return np.mean(xs), np.mean(ys)
 
-def eye_height(landmarks, idxs, h):
-    ys = [landmarks[i].y * h for i in idxs]
-    return max(ys) - min(ys)
-
 def crop_eyes(frame, rect):
-    # Поворачиваем изображение так, чтобы глаза были горизонтально
     (cx, cy), (w, h), angle = rect
     M = cv2.getRotationMatrix2D((cx, cy), angle, 1.0)
     rotated = cv2.warpAffine(frame, M, (frame.shape[1], frame.shape[0]))
-    # axis-aligned bbox
     x_min = int(cx - w/2)
     x_max = int(cx + w/2)
     y_min = int(cy - h/2)
@@ -49,16 +42,16 @@ def crop_eyes(frame, rect):
     crop = rotated[y_min:y_max, x_min:x_max]
     return crop, x_min, y_min, x_max, y_max
 
-# --- Инициализация камеры ---
+# --- Камера ---
 cap = cv2.VideoCapture(0)
 screen_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 screen_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-# --- Начальное положение точки (центр экрана) ---
+# --- Начальная позиция и цель ---
 point_x = screen_w // 2
 point_y = screen_h // 2
-dir_x = random.choice([-1,1])
-dir_y = random.choice([-1,1])
+target_x = random.randint(POINT_RADIUS, screen_w - POINT_RADIUS)
+target_y = random.randint(POINT_RADIUS, screen_h - POINT_RADIUS)
 
 with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True,
                            min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
@@ -68,59 +61,56 @@ with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True,
         if not ret:
             break
 
-        # отразим по горизонтали
         frame = cv2.flip(frame, 1)
 
-        # --- обновление позиции точки ---
-        point_x += POINT_SPEED * dir_x
-        point_y += POINT_SPEED * dir_y
-        if point_x < POINT_RADIUS or point_x > screen_w - POINT_RADIUS:
-            dir_x *= -1
-        if point_y < POINT_RADIUS or point_y > screen_h - POINT_RADIUS:
-            dir_y *= -1
+        # --- движение точки к цели ---
+        dx = target_x - point_x
+        dy = target_y - point_y
+        dist = math.hypot(dx, dy)
 
-        # --- рисуем точку ---
+        if dist < POINT_SPEED:  # цель достигнута → выбираем новую
+            target_x = random.randint(POINT_RADIUS, screen_w - POINT_RADIUS)
+            target_y = random.randint(POINT_RADIUS, screen_h - POINT_RADIUS)
+        else:
+            point_x += int(POINT_SPEED * dx / dist)
+            point_y += int(POINT_SPEED * dy / dist)
+
         cv2.circle(frame, (point_x, point_y), POINT_RADIUS, POINT_COLOR, -1)
 
-        # --- обработка MediaPipe ---
+        # --- MediaPipe ---
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = face_mesh.process(rgb)
 
         if results.multi_face_landmarks:
             h, w, _ = frame.shape
-            for face_landmarks in results.multi_face_landmarks:
-                # центры глаз
-                lx, ly = eye_center(face_landmarks.landmark, LEFT_EYE, w, h)
-                rx, ry = eye_center(face_landmarks.landmark, RIGHT_EYE, w, h)
+            face_landmarks = results.multi_face_landmarks[0]
 
-                # вектор между глазами
-                dx, dy = rx - lx, ry - ly
-                eye_dist = math.hypot(dx, dy)
-                angle = math.degrees(math.atan2(dy, dx))
+            lx, ly = eye_center(face_landmarks.landmark, LEFT_EYE, w, h)
+            rx, ry = eye_center(face_landmarks.landmark, RIGHT_EYE, w, h)
 
-                # центр глаз
-                cx, cy = (lx + rx)/2, (ly + ry)/2
+            dx, dy = rx - lx, ry - ly
+            eye_dist = math.hypot(dx, dy)
+            angle = math.degrees(math.atan2(dy, dx))
 
-                # высота глаз
-                lh = abs(max([face_landmarks.landmark[i].y*h for i in LEFT_EYE]) -
-                         min([face_landmarks.landmark[i].y*h for i in LEFT_EYE]))
-                rh = abs(max([face_landmarks.landmark[i].y*h for i in RIGHT_EYE]) -
-                         min([face_landmarks.landmark[i].y*h for i in RIGHT_EYE]))
-                avg_h = (lh + rh)/2
+            cx, cy = (lx + rx)/2, (ly + ry)/2
 
-                # размеры прямоугольника
-                box_w = eye_dist * 2.0
-                box_h = avg_h * 1.5
+            lh = abs(max([face_landmarks.landmark[i].y*h for i in LEFT_EYE]) -
+                     min([face_landmarks.landmark[i].y*h for i in LEFT_EYE]))
+            rh = abs(max([face_landmarks.landmark[i].y*h for i in RIGHT_EYE]) -
+                     min([face_landmarks.landmark[i].y*h for i in RIGHT_EYE]))
+            avg_h = (lh + rh)/2
 
-                rect = ((cx, cy), (box_w, box_h), angle)
-                crop, x_min, y_min, x_max, y_max = crop_eyes(frame, rect)
+            box_w = eye_dist * 2.0
+            box_h = avg_h * 1.5
 
-                # сохраняем кадр без ресайза
+            rect = ((cx, cy), (box_w, box_h), angle)
+            crop, x_min, y_min, x_max, y_max = crop_eyes(frame, rect)
+
+            if crop.size > 0:
                 filename = f"frame_{frame_count:05d}.png"
                 filepath = os.path.join(OUTPUT_DIR, filename)
                 cv2.imwrite(filepath, crop)
 
-                # сохраняем относительные координаты и имя файла
                 rel_x_min = x_min / screen_w
                 rel_y_min = y_min / screen_h
                 rel_x_max = x_max / screen_w
@@ -131,13 +121,11 @@ with mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True,
 
                 frame_count += 1
 
-        # --- показ видео на весь экран ---
         cv2.namedWindow("Gaze Collection", cv2.WND_PROP_FULLSCREEN)
         cv2.setWindowProperty("Gaze Collection", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.imshow("Gaze Collection", frame)
 
-        key = cv2.waitKey(1)
-        if key == 27:  # Esc
+        if cv2.waitKey(1) & 0xFF == 27:
             break
 
 cap.release()
